@@ -4,7 +4,9 @@ Full SimPad E2E test (steps 1–48) using relative UI-map controls and client-on
 failure screenshots captured before window closes (via app_ctx fixture).
 Requires EN-US keyboard layout.
 """
-
+import sys, pytest
+if sys.platform != "win32":
+    pytest.skip("Windows desktop required for UI tests", allow_module_level=True)
 import time
 import win32gui
 

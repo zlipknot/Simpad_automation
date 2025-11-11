@@ -2,7 +2,10 @@
 """
 Device Information error (two popups) — test using universal OCR verifier.
 """
-
+import sys, pytest
+if sys.platform != "win32":
+    pytest.skip("Windows desktop required for UI tests", allow_module_level=True)
+    
 import time
 
 from simpad_automation.core.window import click_relative, get_client_rect
