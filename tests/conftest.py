@@ -15,6 +15,10 @@ from datetime import datetime
 import pytest
 import pyautogui
 
+if sys.platform != "win32":
+    # Этот conftest нужен только для UI на Windows
+    pytest.skip("Windows desktop required for UI tests", allow_module_level=True)
+
 # ---- 1) Make 'src' importable everywhere ----
 ROOT_DIR = os.path.dirname(os.path.dirname(__file__))
 SRC_DIR = os.path.join(ROOT_DIR, "src")
