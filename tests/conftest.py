@@ -11,11 +11,11 @@ import sys
 import time
 import pathlib
 from datetime import datetime
+import pytest
 
 if sys.platform != "win32":
     pytest.skip("Windows desktop required for UI tests", allow_module_level=True)
 
-import pytest
 import pyautogui
 
 if sys.platform != "win32":
