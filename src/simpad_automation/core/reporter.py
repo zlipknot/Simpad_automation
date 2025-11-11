@@ -1,9 +1,14 @@
 # -*- coding: utf-8 -*-
 import pathlib
 from typing import Optional, Tuple
-
+import base64
 import pyautogui
 import win32gui
+from contextlib import contextmanager
+import html
+import re
+from datetime import datetime
+from pathlib import Path
 
 # pyautogui базовые настройки оставим тут, чтобы снимки были быстрыми и без failsafe-стопов
 pyautogui.FAILSAFE = False
@@ -82,18 +87,123 @@ def save_client_screenshot(hwnd, dest_path: pathlib.Path, draw_hr_roi: bool = Tr
     return dest_path
 
 
-def attach_image_to_pytest_html(rep, path: pathlib.Path) -> None:
-    """
-    Пытается прикрепить изображение в pytest-html (если плагин активен),
-    а также добавить путь в user_properties.
-    """
+def attach_image_to_pytest_html(rep, path):
+    """Прикрепляет изображение к pytest-html (self-contained)."""
     try:
-        if hasattr(rep, "extra"):
-            from pytest_html import extras
-            rep.extra.append(extras.image(str(path)))
+        from pytest_html import extras
+        if not hasattr(rep, "extras"):
+            rep.extras = []
+        abs_path = str(Path(path).resolve())
+        rep.extras.append(extras.image(abs_path))
+    except Exception as e:
+        print(f"[WARN] attach_image_to_pytest_html failed: {e}")
+
+def _slug(s: str) -> str:
+    return re.sub(r"[^a-z0-9]+", "-", s.strip().lower()).strip("-")
+
+def _ensure_node_state(request):
+    node = request.node
+    if not hasattr(node, "_steps"):
+        node._steps = []            # list of dict {idx,name,status,started,ended,screenshot,dir}
+    if not hasattr(node, "_step_idx"):
+        node._step_idx = 0
+    if not hasattr(node, "_reporter_extras"):
+        node._reporter_extras = []  # will be appended to rep in makereport
+    return node
+
+import base64
+
+def _append_step_card(node, step):
+    status = step["status"]
+    name = html.escape(step["name"])
+    times = f'{step["started"]} → {step.get("ended","")}'
+    color = {"passed":"#16a34a","failed":"#dc2626","skipped":"#a3a3a3"}.get(status,"#2563eb")
+
+    shot_html = ""
+    if step.get("screenshot"):
+        p = Path(step["screenshot"]).resolve()
+        # относительный путь для красоты
+        try:
+            rel = p.relative_to(Path.cwd())
+            rel_txt = rel.as_posix()
+        except Exception:
+            rel_txt = str(p)
+
+        # встроим миниатюру прямо в карточку (base64)
+        try:
+            data = base64.b64encode(p.read_bytes()).decode("ascii")
+            thumb = f'<img src="data:image/png;base64,{data}" style="max-width:420px;display:block;margin-top:4px;" />'
+        except Exception:
+            thumb = ""
+
+        shot_html = f'<div>Screenshot: <code>{html.escape(rel_txt)}</code>{thumb}</div>'
+
+    card = f"""
+    <div style="border:1px solid #e5e7eb;border-left:6px solid {color};padding:8px;margin:6px 0;">
+      <div><b>Step {step['idx']}:</b> {name} <span style="color:{color};">[{status}]</span></div>
+      <div style="font-size:12px;color:#6b7280;">{times}</div>
+      {shot_html}
+    </div>
+    """
+
+    try:
+        from pytest_html import extras
+        node._reporter_extras.append(extras.html(card))     # html карточка
+        if step.get("screenshot"):
+            # и полноценный attachment (кроме превью) — тоже встраивается
+            node._reporter_extras.append(extras.image(str(Path(step["screenshot"]).resolve())))
     except Exception:
         pass
+
+
+@contextmanager
+def step(request, name: str, hwnd=None, artifacts_dir: Path | None = None, draw_hr_roi: bool = True):
+    """
+    Контекст-менеджер шага.
+    Пример:
+        with step(request, "Open Device Info", hwnd, artifacts_dir):
+            click(...)
+    На исключении сохранит скриншот и отметит шаг как failed.
+    """
+    node = _ensure_node_state(request)
+    node._step_idx += 1
+    idx = node._step_idx
+    started = datetime.now().strftime("%H:%M:%S")
+    entry = {
+        "idx": idx,
+        "name": name,
+        "status": "passed",
+        "started": started,
+        "ended": None,
+        "screenshot": None,
+        "dir": None,
+    }
+    node._steps.append(entry)
+
+    # подготовим папку для артефактов шага
+    step_dir = None
+    if artifacts_dir:
+        step_dir = Path(artifacts_dir) / f"step_{idx}_{_slug(name)}"
+        step_dir.mkdir(parents=True, exist_ok=True)
+        entry["dir"] = step_dir
+
     try:
-        rep.user_properties.append(("screenshot", str(path)))
+        yield
     except Exception:
-        pass
+        entry["status"] = "failed"
+        entry["ended"] = datetime.now().strftime("%H:%M:%S")
+        # Сохранить скриншот, если есть hwnd
+        try:
+            if hwnd is not None and artifacts_dir is not None:
+                from .reporter import save_client_screenshot  # локальный импорт, чтобы не ломать импорты
+                shot_path = (step_dir or Path(artifacts_dir)) / "failed.png"
+                save_client_screenshot(hwnd, shot_path, draw_hr_roi=draw_hr_roi)
+                entry["screenshot"] = shot_path
+        finally:
+            pass
+        # карточка шага попадёт в отчёт из makereport (см. conftest.py)
+        raise
+    else:
+        entry["status"] = "passed"
+        entry["ended"] = datetime.now().strftime("%H:%M:%S")
+    # карточка добавится в makereport
