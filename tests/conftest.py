@@ -13,6 +13,16 @@ import pathlib
 from datetime import datetime
 import pytest
 
+def pytest_configure(config):
+    """Change name of HTML-report, add timestamp."""
+    htmlpath = getattr(config.option, "htmlpath", None)
+    if htmlpath:
+        ts = datetime.now().strftime("%Y%m%d_%H%M%S")
+        p = pathlib.Path(htmlpath)
+        new_path = p.parent / f"{p.stem}_{ts}{p.suffix}"
+        config.option.htmlpath = str(new_path)
+        print(f"[INFO] HTML report path: {config.option.htmlpath}")
+
 # ---- 0) Make 'src' importable everywhere ----
 ROOT_DIR = os.path.dirname(os.path.dirname(__file__))
 SRC_DIR = os.path.join(ROOT_DIR, "src")
