@@ -12,11 +12,22 @@ import re
 import tempfile
 from pathlib import Path
 from typing import Tuple, List, Dict
+import sys  # ✅ добавлено для платформенной проверки
 
 import cv2
 import numpy as np
-import pyautogui
-import pytesseract
+
+# ✅ ЛЕНИВЫЕ ИМПОРТЫ: не ломаем импорт модуля на Linux/CI
+try:
+    import pyautogui as _pyautogui  # может отсутствовать на CI
+except Exception:
+    _pyautogui = None
+
+try:
+    import pytesseract as _pytesseract  # может отсутствовать на CI
+except Exception:
+    _pytesseract = None
+
 from difflib import SequenceMatcher
 
 
@@ -61,6 +72,21 @@ def _weighted_score(matches: List[Tuple[str, str, float]]) -> float:
     return total / max(1e-9, weight)
 
 
+# ---------- lazy deps helpers (чтобы не падать при импорте на CI) ----------
+
+def _use_pyautogui():
+    """Return pyautogui or raise if unavailable (e.g., Linux CI)."""
+    if _pyautogui is None:
+        raise RuntimeError("pyautogui is not available on this environment (likely non-Windows CI).")
+    return _pyautogui
+
+def _use_pytesseract():
+    """Return pytesseract or raise if unavailable."""
+    if _pytesseract is None:
+        raise RuntimeError("pytesseract is not available in this environment.")
+    return _pytesseract
+
+
 # ---------- screenshot helpers ----------
 
 def _grab_roi_bgr(hwnd, roi_xywh_rel: Tuple[float, float, float, float],
@@ -70,7 +96,8 @@ def _grab_roi_bgr(hwnd, roi_xywh_rel: Tuple[float, float, float, float],
     y = int(client_rect["top"]  + client_rect["height"] * ry)
     w = max(1, int(client_rect["width"]  * rw))
     h = max(1, int(client_rect["height"] * rh))
-    img_rgb = np.array(pyautogui.screenshot(region=(x, y, w, h)))
+    # ✅ используем ленивый импорт
+    img_rgb = np.array(_use_pyautogui().screenshot(region=(x, y, w, h)))
     return cv2.cvtColor(img_rgb, cv2.COLOR_RGB2BGR)
 
 
@@ -96,6 +123,8 @@ def _prep_variants(img_bgr: np.ndarray) -> List[np.ndarray]:
     return variants
 
 def _ocr_text_psm(bin_img: np.ndarray, psm: int) -> str:
+    # ✅ используем ленивый импорт pytesseract
+    pytesseract = _use_pytesseract()
     cfg = f"--oem 3 --psm {psm} -c tessedit_char_whitelist=ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz "
     txt = pytesseract.image_to_string(bin_img, config=cfg, lang="eng")
     return re.sub(r"\s+", " ", txt).strip()
@@ -166,6 +195,8 @@ def _find_word_boxes(bin_img: np.ndarray) -> List[Tuple[int, int, int, int]]:
     return merged
 
 def _tess_word(bin_img: np.ndarray, user_words: Path | None = None) -> str:
+    # ✅ используем ленивый импорт pytesseract
+    pytesseract = _use_pytesseract()
     cfg = "--oem 3 --psm 8 -c tessedit_char_whitelist=ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz"
     if user_words:
         cfg += f" --user-words {str(user_words)}"
@@ -313,3 +344,24 @@ def assert_phrase_in_roi(hwnd, client_rect: Dict[str, int],
         "pairs": pairs_line,
         "debug_dir": str(debug_dir),
     }
+
+# ---- public wrappers for CI unit-tests (no GUI) ----
+
+def normalize_text(s: str) -> str:
+    """Public wrapper around internal _norm_sentence for unit-tests."""
+    return _norm_sentence(s)
+
+def compare_tokens(target: str, ocr_text: str, ok_ratio: float = 0.7) -> bool:
+    """
+    Public boolean check using existing alignment logic.
+    ok_ratio → мэппим на avg_threshold, порог склейки букв берём как в основном пайплайне.
+    """
+    exp_tokens = _tokenize_expected(target)
+    ocr_tokens = _tokenize_expected(ocr_text)
+    ok, _pairs = _align_words(
+        ocr_tokens,
+        exp_tokens,
+        min_ratio=0.62,
+        avg_threshold=ok_ratio,
+    )
+    return ok
