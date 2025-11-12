@@ -19,7 +19,7 @@ if (-not $py) {
 
 # 2) Create .venv
 $venvPath = Join-Path $PROJECT_DIR ".venv"
-if (Test-Path $venvPath -and $Force) {
+if ((Test-Path $venvPath) -and $Force) {
   Write-Host "Removing existing .venv (force)..." -ForegroundColor Yellow
   Remove-Item -Recurse -Force $venvPath
 }
