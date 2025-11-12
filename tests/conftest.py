@@ -6,7 +6,7 @@ Root-level pytest bootstrap:
 - Windows: real UI bootstrap + screenshots + step cards
 - Non-Windows: safe stubs so headless unit tests can run
 - Excludes non-UI tests from HTML report on Windows
-- Deletes empty HTML reports (no executed tests)
+- Keeps only a single report per run (same SESSION_TAG), but does not touch old runs
 """
 import os
 import sys
@@ -24,6 +24,29 @@ ROOT_DIR = os.path.dirname(__file__)
 SRC_DIR = os.path.join(ROOT_DIR, "src")
 if SRC_DIR not in sys.path:
     sys.path.insert(0, SRC_DIR)
+
+
+# ---- 0.5) Pytest 9: strip HTML flags on --collect-only (VS Code save) ----
+def pytest_load_initial_conftests(early_config, parser, args):
+    """
+    VS Code часто запускает pytest --collect-only на сохранение.
+    Если оставить --html из pytest.ini, генерится пустой report.html.
+    Здесь безболезненно вырезаем HTML-флаги для таких запусков.
+    """
+    if "--collect-only" not in args:
+        return
+    i = 0
+    while i < len(args):
+        a = args[i]
+        if a.startswith("--html=") or a == "--self-contained-html":
+            del args[i]
+            continue
+        if a == "--html":
+            del args[i]
+            if i < len(args) and not args[i].startswith("-"):
+                del args[i]  # убрать путь после --html
+            continue
+        i += 1
 
 
 # ---- 1) Add timestamp to pytest-html file name ----
@@ -48,7 +71,6 @@ def pytest_configure(config):
     print(f"[INFO] HTML report path: {config.option.htmlpath}")
 
 
-
 # ---- 2) On Windows + HTML: include only UI/E2E in report (exclude unit tests) ----
 def pytest_collection_modifyitems(config, items):
     """
@@ -71,50 +93,37 @@ def pytest_collection_modifyitems(config, items):
         items[:] = keep
 
 
-# ---- 3) Delete empty HTML reports (all skipped/deselected) ----
+# ---- 3) Keep only one report for this run (same SESSION_TAG); keep history ----
 def pytest_sessionfinish(session, exitstatus):
     """
-    В конце сессии:
-      - сохраняем один итоговый HTML-отчёт для текущего запуска;
-      - удаляем дубликаты отчётов с тем же SESSION_TAG (если IDE запустила несколько);
-      - не трогаем старые отчёты от предыдущих запусков.
+    В конце оставляем ровно один отчёт текущего запуска (по SESSION_TAG),
+    удаляя дубликаты *только* с тем же тегом. Старые отчёты предыдущих запусков не трогаем.
     """
     from pathlib import Path
-    import os
 
-    # итоговый отчёт для этой сессии
     html_fixed = getattr(session.config, "_html_fixed_path", None)
     if not html_fixed:
         return
 
     p = Path(html_fixed)
-    tag = os.environ.get("PYTEST_HTML_TAG", "")
-    if not tag:
-        # fallback: пробуем извлечь из имени файла
-        tag = "_".join(p.stem.split("_")[-2:]) if "_" in p.stem else ""
-
     if not p.exists():
-        print(f"[INFO] HTML report not found at finish: {p}")
         return
 
-    # --- удаляем дубликаты только текущего тега ---
-    try:
-        report_dir = p.parent
-        base_stem = "_".join(p.stem.split("_")[:-1]) if tag in p.stem else p.stem
-        # ищем все файлы вроде report_<tag>.html, report_<tag>_1.html и т.п.
-        candidates = sorted(report_dir.glob(f"{base_stem}_{tag}*.html"))
-        for f in candidates:
-            if f != p:
-                try:
-                    f.unlink()
-                    print(f"[CLEAN] Removed duplicate report: {f.name}")
-                except Exception as e:
-                    print(f"[WARN] Could not remove duplicate {f}: {e}")
-    except Exception as e:
-        print(f"[WARN] sessionfinish cleanup failed: {e}")
+    tag = os.environ.get("PYTEST_HTML_TAG", SESSION_TAG)
+    report_dir = p.parent
+    base_stem = "_".join(p.stem.split("_")[:-1]) if tag in p.stem else p.stem
+
+    # все файлы вида report_<tag>*.html в текущем запуске
+    candidates = sorted(report_dir.glob(f"{base_stem}_{tag}*.html"))
+    for f in candidates:
+        if f != p:
+            try:
+                f.unlink()
+                print(f"[CLEAN] Removed duplicate report: {f.name}")
+            except Exception:
+                pass
 
     print(f"[INFO] Kept single HTML report for this run: {p.name}")
-
 
 
 # ======================================================================

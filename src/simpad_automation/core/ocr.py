@@ -16,11 +16,12 @@ import pyautogui
 import pytesseract
 
 from .window import get_client_rect
+from simpad_automation.ui.controls import HR_ROI
 
 pyautogui.FAILSAFE = False
 pyautogui.PAUSE = 0.02
 
-# ---------- базовые утилиты ----------
+# ---------- base utils ----------
 
 def _grab_roi_bgr(hwnd, rx: float, ry: float, rw: float, rh: float) -> np.ndarray:
     rect = get_client_rect(hwnd)
@@ -34,13 +35,14 @@ def _grab_roi_bgr(hwnd, rx: float, ry: float, rw: float, rh: float) -> np.ndarra
     return cv2.cvtColor(img_rgb, cv2.COLOR_RGB2BGR)
 
 def _scale_and_binarize(gray: np.ndarray) -> np.ndarray:
-    # Увеличиваем сильнее, чтобы нули были толще
+    # Improve size of screenshot, to make zeros bigger
     big = cv2.resize(gray, None, fx=3, fy=3, interpolation=cv2.INTER_CUBIC)
-    # Мягкое выравнивание контраста
+    # Soft adding contrast
     big = cv2.GaussianBlur(big, (3, 3), 0)
     _, thr = cv2.threshold(big, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)
     return thr
 
+    # Launch tesseract in string mode (psm), and add only numbers to whitelist
 def _tess_digits(img_bin: np.ndarray, psm: int = 7) -> Optional[int]:
     cfg = f"--psm {psm} -c tessedit_char_whitelist=0123456789"
     txt = pytesseract.image_to_string(img_bin, config=cfg)
@@ -52,11 +54,11 @@ def _tess_digits(img_bin: np.ndarray, psm: int = 7) -> Optional[int]:
     except Exception:
         return None
 
-# ---------- основная стратегия ----------
+# ---------- main strategy ----------
 
 def _ocr_passes(img_bgr: np.ndarray) -> Optional[int]:
-    """Несколько разных предобработок для целого числа."""
-    # 1) По маске зелёного (HR у тебя зелёные)
+    """Different ways how to check numbers."""
+    # 1) By green mask (HR green text). It's better to store RGB colours code in ui/controls file
     hsv = cv2.cvtColor(img_bgr, cv2.COLOR_BGR2HSV)
     lower = np.array([35, 60, 60], dtype=np.uint8)
     upper = np.array([90, 255, 255], dtype=np.uint8)
@@ -66,30 +68,30 @@ def _ocr_passes(img_bgr: np.ndarray) -> Optional[int]:
     if val is not None:
         return val
 
-    # 2) Стандартная бинаризация по яркости
+    # 2) Binarize by brightness
     gray = cv2.cvtColor(img_bgr, cv2.COLOR_BGR2GRAY)
     val = _tess_digits(_scale_and_binarize(gray), psm=7)
     if val is not None:
         return val
 
-    # 3) Инвертированная бинаризация — бывает полезно
+    # 3) Invert binarize
     gray_inv = 255 - gray
     val = _tess_digits(_scale_and_binarize(gray_inv), psm=7)
     return val
 
 def _segments_left_to_right(bin_img: np.ndarray) -> List[np.ndarray]:
-    """Готовим вырезки по отдельным символам слева направо."""
-    # Немного расширим штрихи, чтобы контуры были цельными
+    """Prepare to cut HR value to the separate symbols"""
+    # Expand the strokes a little so that the contours are solid
     k = np.ones((3,3), np.uint8)
     proc = cv2.morphologyEx(bin_img, cv2.MORPH_CLOSE, k, iterations=1)
-    # Находим контуры
+    # Finding contours
     cnts, _ = cv2.findContours(proc, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
     boxes = [cv2.boundingRect(c) for c in cnts]
-    # отфильтруем шум очень маленькой площади
+    # Filter noise in a small area
     boxes = [b for b in boxes if b[2] * b[3] >= 20]
-    # сортировка слева направо
+    # Sort from left to right
     boxes.sort(key=lambda b: b[0])
-    # вырезаем символы
+    # Cut symbols
     crops = []
     for (x, y, w, h) in boxes:
         pad = 2
@@ -100,7 +102,7 @@ def _segments_left_to_right(bin_img: np.ndarray) -> List[np.ndarray]:
     return crops
 
 def _ocr_by_components(img_bgr: np.ndarray) -> Optional[int]:
-    """Посимвольное распознавание: psm=10, затем склейка."""
+    """Character recognition: psm=10, then gluing."""
     gray = cv2.cvtColor(img_bgr, cv2.COLOR_BGR2GRAY)
     bin_img = _scale_and_binarize(gray)
 
@@ -110,13 +112,13 @@ def _ocr_by_components(img_bgr: np.ndarray) -> Optional[int]:
 
     digits = []
     for crop in crops:
-        # PSM 10 — один символ, whitelist только цифры
+        # PSM 10 — one symbol, whitelist only numbers
         cfg = "--psm 10 -c tessedit_char_whitelist=0123456789"
         txt = pytesseract.image_to_string(crop, config=cfg)
         d = re.sub(r"\D", "", txt)
         if not d:
             continue
-        digits.append(d[-1])  # берём последнюю цифру, если вдруг вернулось больше
+        digits.append(d[-1])  # take only last number in case if return more
 
     if not digits:
         return None
@@ -128,23 +130,23 @@ def _ocr_by_components(img_bgr: np.ndarray) -> Optional[int]:
 def read_digits_from_roi(hwnd, rx: float, ry: float, rw: float, rh: float,
                          retries: int = 3, sleep: float = 0.08) -> Optional[int]:
     """
-    Мультипроходное распознавание числа в ROI:
-    - пробуем 3 предобработки целиком;
-    - если неуверенно/обрезало ноль → посимвольно.
+    Multi-pass number recognition in ROI:
+    - try all three preprocessing steps;
+    - if uncertain/zero truncated -- character by character.
     """
     val_last = None
     for _ in range(max(1, retries)):
         img = _grab_roi_bgr(hwnd, rx, ry, rw, rh)
-        # Основные проходы
+        # Main runs
         val = _ocr_passes(img)
         if val is not None:
-            # если подозрительно коротко (например, 10 вместо 100) — попробуем посимвольно
+        # If it's suspiciously short (for example, 10 instead of 100), try it character by character.
             if val < 30 or val in (8, 80) and rw < 0.16:
                 comp_val = _ocr_by_components(img)
                 if comp_val is not None:
                     return comp_val
             return val
-        # fallback посимвольно
+        # fallback character by character
         comp_val = _ocr_by_components(img)
         if comp_val is not None:
             return comp_val
@@ -153,12 +155,7 @@ def read_digits_from_roi(hwnd, rx: float, ry: float, rw: float, rh: float,
         time.sleep(sleep)
     return val_last
 
-# ---------- конкретно для HR ----------
-# Чуть увеличим ROI по ширине/высоте, чтобы третий символ не обрезался
-HR_CX, HR_CY = 0.667, 0.217
-HR_RW, HR_RH = 0.18, 0.14  # было 0.14/0.12 — добавили запас
-HR_RX = HR_CX - HR_RW / 2.0
-HR_RY = HR_CY - HR_RH / 2.0
+HR_RX, HR_RY, HR_RW, HR_RH = HR_ROI
 
 def read_hr_value(hwnd, retries: int = 3) -> Optional[int]:
     return read_digits_from_roi(hwnd, HR_RX, HR_RY, HR_RW, HR_RH, retries=retries)

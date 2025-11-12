@@ -28,6 +28,16 @@ HR_SLIDER_START  = (0.792, 0.584)
 HR_SLIDER_END    = (0.792, 0.519)
 ACTIVATE_BUTTON  = (0.694, 0.891)
 
+# ---------- HR display ROI (relative to client rect) ----------
+# Center/size picked to avoid truncating the 3rd digit (extra width/height margin)
+HR_CX, HR_CY = 0.667, 0.217
+HR_RW, HR_RH = 0.18, 0.14  # increased vs old 0.14/0.12
+HR_RX = HR_CX - HR_RW / 2.0
+HR_RY = HR_CY - HR_RH / 2.0
+
+# Single source of truth for OCR/readers/overlays
+HR_ROI = (HR_RX, HR_RY, HR_RW, HR_RH)
+
 # Volume screen
 VOLUME_BUTTON = (0.765, 0.933)
 
