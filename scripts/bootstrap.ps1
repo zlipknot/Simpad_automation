@@ -87,6 +87,41 @@ markers =
   Write-Host "Created minimal pytest.ini" -ForegroundColor Green
 }
 
+# 5a) Final sanitize: enforce UTF-8 (no BOM) for pytest.ini on all machines
+if (Test-Path $pytestIni) {
+  try {
+    $bytes = [System.IO.File]::ReadAllBytes($pytestIni)
+
+    # Decode based on BOM if present
+    if ($bytes.Length -ge 2 -and $bytes[0] -eq 255 -and $bytes[1] -eq 254) {
+      # UTF-16 LE
+      $text = [System.Text.Encoding]::Unicode.GetString($bytes)
+      Write-Host "pytest.ini was UTF-16 LE → converting to UTF-8 (no BOM)..." -ForegroundColor Yellow
+    } elseif ($bytes.Length -ge 3 -and $bytes[0] -eq 239 -and $bytes[1] -eq 187 -and $bytes[2] -eq 191) {
+      # UTF-8 with BOM
+      $text = [System.Text.Encoding]::UTF8.GetString($bytes, 3, $bytes.Length - 3)
+      Write-Host "pytest.ini had UTF-8 BOM → removing..." -ForegroundColor Yellow
+    } else {
+      # Assume UTF-8 already
+      $text = [System.Text.Encoding]::UTF8.GetString($bytes)
+    }
+
+    # Remove any stray FEFF inside and trim accidental leading invisibles
+    $text = $text -replace [char]0xFEFF, ''
+    $text = $text.TrimStart()
+
+    # Write back strictly as UTF-8 without BOM (works uniformly in PS 5.1/7+)
+    [System.IO.File]::WriteAllText($pytestIni, $text, [System.Text.UTF8Encoding]::new($false))
+    Write-Host "✅ pytest.ini normalized to UTF-8 (no BOM)." -ForegroundColor Green
+  }
+  catch {
+    Write-Host "❌ Failed to normalize pytest.ini: $_" -ForegroundColor Red
+  }
+} else {
+  Write-Host "⚠️ pytest.ini not found for final sanitize." -ForegroundColor Yellow
+}
+
+
 # 6) Create run scripts
 $runUi = Join-Path $SCRIPT_DIR "run_ui.ps1"
 $runUnit = Join-Path $SCRIPT_DIR "run_unit.ps1"
