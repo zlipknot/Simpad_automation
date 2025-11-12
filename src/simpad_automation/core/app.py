@@ -11,10 +11,10 @@ def _shell_execute_open(path, cwd):
         raise RuntimeError(f"ShellExecuteW failed: {hinst}")
 
 def launch_app(timeout: float = 20.0):
-    # 1) Запуск как при ручном двойном клике
+    # 1) Launch app (double click simulation)
     _shell_execute_open(APP_PATH, APP_DIR)
 
-    # 2) Ждём появления главного окна
+    # 2) Waiting for app window
     hwnd = None
     t0 = time.time()
     while time.time() - t0 < timeout:
@@ -32,7 +32,7 @@ def launch_app(timeout: float = 20.0):
     if not hwnd:
         raise RuntimeError("Окно SimPad не найдено после ShellExecute.")
 
-    # 3) Выводим на передний план и ждём реального фокуса
+    # 3) Bring it to the foreground and wait for the actual focus
     try:
         win32gui.ShowWindow(hwnd, win32con.SW_RESTORE)
         win32gui.SetForegroundWindow(hwnd)
@@ -45,12 +45,12 @@ def launch_app(timeout: float = 20.0):
             break
         time.sleep(0.1)
 
-    # 4) Даем приложению полностью прогрузиться перед первым кликом
+    # 4) Waiter to give app full loading before the first click
     time.sleep(3.0)
-    return None, hwnd  # process-объекта нет — будем закрывать через hwnd
+    return None, hwnd  # close by hwnd
 
 def close_app(_process, hwnd):
-    """Закрывает окно через WM_CLOSE (т.к. запускали через ShellExecute)."""
+    """Close window with WM_CLOSE (because launch with ShellExecute)."""
     try:
         win32gui.PostMessage(hwnd, win32con.WM_CLOSE, 0, 0)
     except Exception:
