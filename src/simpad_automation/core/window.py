@@ -1,208 +1,168 @@
 # -*- coding: utf-8 -*-
-import pathlib
-from typing import Optional, Tuple
-import base64
+import time
+import ctypes
+from ctypes import wintypes
+
 import pyautogui
 import win32gui
-from contextlib import contextmanager
-import html
-import re
-from datetime import datetime
-from pathlib import Path
+import win32api
+import win32con
 
-# pyautogui basic configuration — ensures fast screenshots and disables failsafe stop
+# Setup pyautogui for stability
 pyautogui.FAILSAFE = False
 pyautogui.PAUSE = 0.02
 
+# Compatibility: On some Python/Windows builds, wintypes does not have ULONG_PTR
+if not hasattr(wintypes, "ULONG_PTR"):
+    wintypes.ULONG_PTR = ctypes.c_uint64 if ctypes.sizeof(ctypes.c_void_p) == 8 else ctypes.c_ulong
 
-def _client_region(hwnd) -> Optional[Tuple[int, int, int, int]]:
+# ---------- Base windows helpers ----------
+
+def get_client_rect(hwnd):
     """
-    Returns the client rectangle of hwnd in screen coordinates as (x, y, w, h),
-    or None if the window is unavailable.
-    """
-    if not hwnd or not win32gui.IsWindow(hwnd):
-        return None
-    try:
-        l, t, r, b = win32gui.GetClientRect(hwnd)
-        (sx, sy) = win32gui.ClientToScreen(hwnd, (l, t))
-        (ex, ey) = win32gui.ClientToScreen(hwnd, (r, b))
-        w = max(0, ex - sx)
-        h = max(0, ey - sy)
-        if w <= 0 or h <= 0:
-            return None
-        return (sx, sy, w, h)
-    except Exception:
-        return None
-
-
-def _draw_hr_roi_overlay(img, client_w: int, client_h: int) -> None:
-    """
-    Draws ROI H/R (if HR_RX/RY/RW/RH are declared in ocr.py).
-    Silently ignores any errors.
-    """
-    try:
-        from PIL import ImageDraw
-        from simpad_automation.core.ocr import HR_RX, HR_RY, HR_RW, HR_RH
-
-        draw = ImageDraw.Draw(img)
-        x0 = int(client_w * HR_RX)
-        y0 = int(client_h * HR_RY)
-        x1 = int(client_w * (HR_RX + HR_RW))
-        y1 = int(client_h * (HR_RY + HR_RH))
-
-        for off in (0, 1):
-            draw.rectangle([x0 - off, y0 - off, x1 + off, y1 + off], outline=(0, 255, 0))
-
-        label = "HR ROI"
-        # simple label background (without ImageFont to avoid font dependencies)
-        tw = max(36, len(label) * 6)
-        th = 12
-        draw.rectangle([x0, max(0, y0 - th - 4), x0 + tw + 6, y0], fill=(0, 255, 0))
-        draw.text((x0 + 3, max(0, y0 - th - 3)), label, fill=(0, 0, 0))
-    except Exception as e:
-        print(f"[INFO] HR ROI overlay skipped: {e}")
-
-
-def save_client_screenshot(hwnd, dest_path: pathlib.Path, draw_hr_roi: bool = True) -> pathlib.Path:
-    """
-    Takes a screenshot of the client area (if available) or full screen.
-    Optionally draws HR ROI, saves it to disk, and returns the file path.
-    """
-    dest_path.parent.mkdir(parents=True, exist_ok=True)
-    region = _client_region(hwnd)
-
-    # Capture screenshot
-    if region:
-        img = pyautogui.screenshot(region=region)  # PIL.Image
-        client_w, client_h = region[2], region[3]
-    else:
-        img = pyautogui.screenshot()
-        client_w, client_h = img.size
-
-    if draw_hr_roi:
-        _draw_hr_roi_overlay(img, client_w, client_h)
-
-    img.save(dest_path)
-    return dest_path
-
-
-def attach_image_to_pytest_html(rep, path):
-    """Attach image to pytest-html report (self-contained)."""
-    try:
-        from pytest_html import extras
-        if not hasattr(rep, "extras"):
-            rep.extras = []
-        abs_path = str(Path(path).resolve())
-        rep.extras.append(extras.image(abs_path))
-    except Exception as e:
-        print(f"[WARN] attach_image_to_pytest_html failed: {e}")
-
-def _slug(s: str) -> str:
-    return re.sub(r"[^a-z0-9]+", "-", s.strip().lower()).strip("-")
-
-def _ensure_node_state(request):
-    node = request.node
-    if not hasattr(node, "_steps"):
-        node._steps = []            # list of dict {idx,name,status,started,ended,screenshot,dir}
-    if not hasattr(node, "_step_idx"):
-        node._step_idx = 0
-    if not hasattr(node, "_reporter_extras"):
-        node._reporter_extras = []  # will be appended to rep in makereport
-    return node
-
-import base64
-
-def _append_step_card(node, step):
-    status = step["status"]
-    name = html.escape(step["name"])
-    times = f'{step["started"]} → {step.get("ended","")}'
-    color = {"passed":"#16a34a","failed":"#dc2626","skipped":"#a3a3a3"}.get(status,"#2563eb")
-
-    shot_html = ""
-    if step.get("screenshot"):
-        p = Path(step["screenshot"]).resolve()
-        # relative path for display clarity
-        try:
-            rel = p.relative_to(Path.cwd())
-            rel_txt = rel.as_posix()
-        except Exception:
-            rel_txt = str(p)
-
-        # embed thumbnail directly into the card (base64)
-        try:
-            data = base64.b64encode(p.read_bytes()).decode("ascii")
-            thumb = f'<img src="data:image/png;base64,{data}" style="max-width:420px;display:block;margin-top:4px;" />'
-        except Exception:
-            thumb = ""
-
-        shot_html = f'<div>Screenshot: <code>{html.escape(rel_txt)}</code>{thumb}</div>'
-
-    card = f"""
-    <div style="border:1px solid #e5e7eb;border-left:6px solid {color};padding:8px;margin:6px 0;">
-      <div><b>Step {step['idx']}:</b> {name} <span style="color:{color};">[{status}]</span></div>
-      <div style="font-size:12px;color:#6b7280;">{times}</div>
-      {shot_html}
-    </div>
-    """
-
-    try:
-        from pytest_html import extras
-        node._reporter_extras.append(extras.html(card))     # HTML card
-        if step.get("screenshot"):
-            # also attach full-size image (besides the preview)
-            node._reporter_extras.append(extras.image(str(Path(step["screenshot"]).resolve())))
-    except Exception:
-        pass
-
-
-@contextmanager
-def step(request, name: str, hwnd=None, artifacts_dir: Path | None = None, draw_hr_roi: bool = True):
-    """
-    Step context manager.
-    Example:
-        with step(request, "Open Device Info", hwnd, artifacts_dir):
-            click(...)
-    On exception — saves a screenshot and marks the step as failed.
-    """
-    node = _ensure_node_state(request)
-    node._step_idx += 1
-    idx = node._step_idx
-    started = datetime.now().strftime("%H:%M:%S")
-    entry = {
-        "idx": idx,
-        "name": name,
-        "status": "passed",
-        "started": started,
-        "ended": None,
-        "screenshot": None,
-        "dir": None,
+    Returns the coordinates of the window's client area (in screen coordinates) + diagnostics.
+    {
+      left, top, right, bottom, width, height
     }
-    node._steps.append(entry)
-
-    # prepare artifact directory for the step
-    step_dir = None
-    if artifacts_dir:
-        step_dir = Path(artifacts_dir) / f"step_{idx}_{_slug(name)}"
-        step_dir.mkdir(parents=True, exist_ok=True)
-        entry["dir"] = step_dir
-
+    """
     try:
-        yield
-    except Exception:
-        entry["status"] = "failed"
-        entry["ended"] = datetime.now().strftime("%H:%M:%S")
-        # Save screenshot if hwnd is available
+        if not win32gui.IsWindow(hwnd):
+            print(f"[ERROR] HWND {hwnd} is not a valid window handle.")
+            return None
+
+        title = win32gui.GetWindowText(hwnd)
+        l, t, r, b = win32gui.GetClientRect(hwnd)
+        (left, top) = win32gui.ClientToScreen(hwnd, (l, t))
+        (right, bottom) = win32gui.ClientToScreen(hwnd, (r, b))
+        rect = {
+            "left": left,
+            "top": top,
+            "right": right,
+            "bottom": bottom,
+            "width": right - left,
+            "height": bottom - top,
+        }
+        print(f"[INFO] get_client_rect('{title}') -> {rect}")
+        return rect
+    except Exception as e:
+        print(f"[ERROR] get_client_rect failed for hwnd={hwnd}: {e}")
+        return None
+
+
+def rel_to_abs(hwnd, rx: float, ry: float):
+    """Convert client area fractions (rx, ry) to absolute screen coordinates (x, y)."""
+    rect = get_client_rect(hwnd)
+    if not rect:
+        raise RuntimeError("rel_to_abs: client rect is not available")
+    x = int(rect["left"] + rect["width"] * rx)
+    y = int(rect["top"] + rect["height"] * ry)
+    return x, y
+
+
+def wait_foreground(hwnd, timeout=3.0):
+    """Actively waits for the window to become foreground (we raise it to the background and focus it)."""
+    t0 = time.time()
+    while time.time() - t0 < timeout:
         try:
-            if hwnd is not None and artifacts_dir is not None:
-                from .reporter import save_client_screenshot  # local import to avoid circular imports
-                shot_path = (step_dir or Path(artifacts_dir)) / "failed.png"
-                save_client_screenshot(hwnd, shot_path, draw_hr_roi=draw_hr_roi)
-                entry["screenshot"] = shot_path
-        finally:
+            if win32gui.GetForegroundWindow() == hwnd:
+                return True
+            win32gui.ShowWindow(hwnd, win32con.SW_RESTORE)
+            win32gui.SetForegroundWindow(hwnd)
+        except Exception:
             pass
-        # step card will appear in report via makereport (see conftest.py)
-        raise
-    else:
-        entry["status"] = "passed"
-        entry["ended"] = datetime.now().strftime("%H:%M:%S")
-    # step card will be added in makereport
+        time.sleep(0.05)
+    return False
+
+
+# ---------- Clicks (with SendInput) ----------
+
+user32 = ctypes.WinDLL("user32", use_last_error=True)
+
+class MOUSEINPUT(ctypes.Structure):
+    _fields_ = [
+        ("dx", wintypes.LONG),
+        ("dy", wintypes.LONG),
+        ("mouseData", wintypes.DWORD),
+        ("dwFlags", wintypes.DWORD),
+        ("time", wintypes.DWORD),
+        ("dwExtraInfo", wintypes.ULONG_PTR),
+    ]
+
+class INPUT(ctypes.Structure):
+    _fields_ = [("type", wintypes.DWORD), ("mi", MOUSEINPUT)]
+
+INPUT_MOUSE = 0
+MOUSEEVENTF_LEFTDOWN = 0x0002
+MOUSEEVENTF_LEFTUP   = 0x0004
+
+def _sendinput_click_left():
+    """Reliable left-click via SendInput (good for touch/unusual UI)."""
+    down = INPUT(type=INPUT_MOUSE, mi=MOUSEINPUT(0, 0, 0, MOUSEEVENTF_LEFTDOWN, 0, 0))
+    up   = INPUT(type=INPUT_MOUSE, mi=MOUSEINPUT(0, 0, 0, MOUSEEVENTF_LEFTUP,   0, 0))
+    user32.SendInput(1, ctypes.byref(down), ctypes.sizeof(INPUT))
+    time.sleep(0.03)
+    user32.SendInput(1, ctypes.byref(up), ctypes.sizeof(INPUT))
+
+
+def click_relative(hwnd, rx: float, ry: float, delay: float = 0.1):
+    """A single click on the relative coordinates of the client area.
+        Returns the (x, y) coordinates of the actual click location.
+    """
+    wait_foreground(hwnd, timeout=1.0)
+    x, y = rel_to_abs(hwnd, rx, ry)
+    win32api.SetCursorPos((x, y))
+    time.sleep(0.12)        
+    _sendinput_click_left()
+    time.sleep(delay)
+    return x, y
+
+
+def ensure_focus(hwnd, rx: float, ry: float):
+    """Return focus to the window: double-click on the point (rx, ry) of the client area."""
+    wait_foreground(hwnd, timeout=1.0)
+    x, y = rel_to_abs(hwnd, rx, ry)
+    win32api.SetCursorPos((x, y))
+    time.sleep(0.12)
+    _sendinput_click_left()
+    time.sleep(0.06)
+    _sendinput_click_left()
+    time.sleep(0.2)
+
+
+# ---------- Smooth dragging (drag) ----------
+
+def drag_relative(hwnd,
+                  rx_start: float, ry_start: float,
+                  rx_end: float,   ry_end: float,
+                  steps: int = 10, duration: float = 0.6):
+    """ 
+    Smooth dragging based on relative client area coordinates.
+    - steps: number of intermediate points (10–15 is usually sufficient)
+    - duration: total drag time (sec)
+    """
+    rect = get_client_rect(hwnd)
+    if not rect:
+        raise RuntimeError("drag_relative: client rect is not available")
+
+    x0 = rect["left"] + rect["width"]  * rx_start
+    y0 = rect["top"]  + rect["height"] * ry_start
+    x1 = rect["left"] + rect["width"]  * rx_end
+    y1 = rect["top"]  + rect["height"] * ry_end
+
+    # Just in case, let's bring the window to the front before dragging.
+    wait_foreground(hwnd, timeout=1.0)
+
+    # Smooth movement
+    pyautogui.moveTo(x0, y0)
+    time.sleep(0.05)
+    pyautogui.mouseDown()
+    try:
+        for i in range(1, steps + 1):
+            t = i / steps
+            x = x0 + (x1 - x0) * t
+            y = y0 + (y1 - y0) * t
+            pyautogui.moveTo(x, y)
+            time.sleep(max(0.0, duration / steps))
+    finally:
+        pyautogui.mouseUp()
+    time.sleep(0.1)
