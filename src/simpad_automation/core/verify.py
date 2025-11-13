@@ -12,19 +12,19 @@ import re
 import tempfile
 from pathlib import Path
 from typing import Tuple, List, Dict
-import sys  # ✅ добавлено для платформенной проверки
+import sys  # added for platform check
 
 import cv2
 import numpy as np
 
-# ✅ ЛЕНИВЫЕ ИМПОРТЫ: не ломаем импорт модуля на Linux/CI
+# LAZY IMPORTS: avoid breaking module import on Linux/CI
 try:
-    import pyautogui as _pyautogui  # может отсутствовать на CI
+    import pyautogui as _pyautogui  # may be missing on CI
 except Exception:
     _pyautogui = None
 
 try:
-    import pytesseract as _pytesseract  # может отсутствовать на CI
+    import pytesseract as _pytesseract  # may be missing on CI
 except Exception:
     _pytesseract = None
 
@@ -61,7 +61,7 @@ def _tokenize_expected(phrase: str) -> List[str]:
     return [w for w in _norm_sentence(phrase).split() if w]
 
 def _weighted_score(matches: List[Tuple[str, str, float]]) -> float:
-    """Weighted avg by content vs stopwords."""
+    """Weighted average by content vs. stopwords."""
     if not matches:
         return 0.0
     total, weight = 0.0, 0.0
@@ -72,10 +72,10 @@ def _weighted_score(matches: List[Tuple[str, str, float]]) -> float:
     return total / max(1e-9, weight)
 
 
-# ---------- lazy deps helpers (чтобы не падать при импорте на CI) ----------
+# ---------- lazy deps helpers (so import won't fail on CI) ----------
 
 def _use_pyautogui():
-    """Return pyautogui or raise if unavailable (e.g., Linux CI)."""
+    """Return pyautogui or raise if unavailable (e.g., non-Windows CI)."""
     if _pyautogui is None:
         raise RuntimeError("pyautogui is not available on this environment (likely non-Windows CI).")
     return _pyautogui
@@ -96,7 +96,7 @@ def _grab_roi_bgr(hwnd, roi_xywh_rel: Tuple[float, float, float, float],
     y = int(client_rect["top"]  + client_rect["height"] * ry)
     w = max(1, int(client_rect["width"]  * rw))
     h = max(1, int(client_rect["height"] * rh))
-    # ✅ используем ленивый импорт
+    # ✅ use lazy import
     img_rgb = np.array(_use_pyautogui().screenshot(region=(x, y, w, h)))
     return cv2.cvtColor(img_rgb, cv2.COLOR_RGB2BGR)
 
@@ -123,7 +123,7 @@ def _prep_variants(img_bgr: np.ndarray) -> List[np.ndarray]:
     return variants
 
 def _ocr_text_psm(bin_img: np.ndarray, psm: int) -> str:
-    # ✅ используем ленивый импорт pytesseract
+    # use lazy import for pytesseract
     pytesseract = _use_pytesseract()
     cfg = f"--oem 3 --psm {psm} -c tessedit_char_whitelist=ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz "
     txt = pytesseract.image_to_string(bin_img, config=cfg, lang="eng")
@@ -195,7 +195,7 @@ def _find_word_boxes(bin_img: np.ndarray) -> List[Tuple[int, int, int, int]]:
     return merged
 
 def _tess_word(bin_img: np.ndarray, user_words: Path | None = None) -> str:
-    # ✅ используем ленивый импорт pytesseract
+    # use lazy import for pytesseract
     pytesseract = _use_pytesseract()
     cfg = "--oem 3 --psm 8 -c tessedit_char_whitelist=ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz"
     if user_words:
@@ -354,7 +354,7 @@ def normalize_text(s: str) -> str:
 def compare_tokens(target: str, ocr_text: str, ok_ratio: float = 0.7) -> bool:
     """
     Public boolean check using existing alignment logic.
-    ok_ratio → мэппим на avg_threshold, порог склейки букв берём как в основном пайплайне.
+    ok_ratio → mapped to avg_threshold; the character-glue split threshold is taken from the main pipeline.
     """
     exp_tokens = _tokenize_expected(target)
     ocr_tokens = _tokenize_expected(ocr_text)

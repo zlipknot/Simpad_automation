@@ -29,9 +29,9 @@ if SRC_DIR not in sys.path:
 # ---- 0.5) Pytest 9: strip HTML flags on --collect-only (VS Code save) ----
 def pytest_load_initial_conftests(early_config, parser, args):
     """
-    VS Code часто запускает pytest --collect-only на сохранение.
-    Если оставить --html из pytest.ini, генерится пустой report.html.
-    Здесь безболезненно вырезаем HTML-флаги для таких запусков.
+    VS Code often runs pytest --collect-only on save.
+    If --html is left in pytest.ini, an empty report.html is generated.
+    This safely removes HTML flags for such runs.
     """
     if "--collect-only" not in args:
         return
@@ -44,14 +44,14 @@ def pytest_load_initial_conftests(early_config, parser, args):
         if a == "--html":
             del args[i]
             if i < len(args) and not args[i].startswith("-"):
-                del args[i]  # убрать путь после --html
+                del args[i]  # remove path following --html
             continue
         i += 1
 
 
 # ---- 1) Add timestamp to pytest-html file name ----
 def pytest_configure(config):
-    """Фиксируем имя HTML-отчёта один раз на весь запуск (по SESSION_TAG)."""
+    """Fix the HTML report name once per run (based on SESSION_TAG)."""
     htmlpath = getattr(config.option, "htmlpath", None)
     if not htmlpath:
         return
@@ -61,11 +61,11 @@ def pytest_configure(config):
     p.parent.mkdir(parents=True, exist_ok=True)
 
     tag = os.environ.get("PYTEST_HTML_TAG", SESSION_TAG)
-    # если имя уже содержит тег — не дублируем
+    # if the name already contains the tag, do not duplicate
     if not p.stem.endswith(tag):
         p = p.parent / f"{p.stem}_{tag}{p.suffix}"
 
-    # запомним, чтобы другие хуки знали итоговый путь
+    # store it so other hooks know the final path
     config.option.htmlpath = str(p)
     config._html_fixed_path = str(p)
     print(f"[INFO] HTML report path: {config.option.htmlpath}")
@@ -74,7 +74,7 @@ def pytest_configure(config):
 # ---- 2) On Windows + HTML: include only UI/E2E in report (exclude unit tests) ----
 def pytest_collection_modifyitems(config, items):
     """
-    If HTML report is requested on Windows, only keep tests marked as @pytest.mark.ui or @pytest.mark.e2e.
+    If HTML report is requested on Windows, keep only tests marked with @pytest.mark.ui or @pytest.mark.e2e.
     Others (like unit tests) are deselected => won't run and won't appear in the report.
     """
     if sys.platform != "win32":
@@ -96,8 +96,8 @@ def pytest_collection_modifyitems(config, items):
 # ---- 3) Keep only one report for this run (same SESSION_TAG); keep history ----
 def pytest_sessionfinish(session, exitstatus):
     """
-    В конце оставляем ровно один отчёт текущего запуска (по SESSION_TAG),
-    удаляя дубликаты *только* с тем же тегом. Старые отчёты предыдущих запусков не трогаем.
+    At the end, keep exactly one report for the current run (based on SESSION_TAG),
+    deleting only duplicates with the same tag. Reports from previous runs remain untouched.
     """
     from pathlib import Path
 
@@ -113,7 +113,7 @@ def pytest_sessionfinish(session, exitstatus):
     report_dir = p.parent
     base_stem = "_".join(p.stem.split("_")[:-1]) if tag in p.stem else p.stem
 
-    # все файлы вида report_<tag>*.html в текущем запуске
+    # all files matching report_<tag>*.html for the current run
     candidates = sorted(report_dir.glob(f"{base_stem}_{tag}*.html"))
     for f in candidates:
         if f != p:
@@ -149,7 +149,7 @@ else:
     from simpad_automation.core.app import launch_app, close_app
     from simpad_automation.core.reporter import (
         save_client_screenshot,
-        attach_image_to_pytest_html,   # оставим, если используешь
+        attach_image_to_pytest_html,   # keep if you use it
         _append_step_card,
     )
 
@@ -159,8 +159,8 @@ else:
     @pytest.fixture()
     def app_ctx(request):
         """
-        Launch SimPad app once per test and close it in teardown.
-        Stores hwnd on test node so makereport can screenshot before closing.
+        Launch SimPad app once per test and close it on teardown.
+        Stores hwnd on test node so makereport can take a screenshot before closing.
         """
         process, hwnd = launch_app()
         request.node._simpad_hwnd = hwnd
@@ -194,7 +194,7 @@ else:
                 # pytest-html >=4.1
                 if not hasattr(rep, "extras"):
                     rep.extras = []
-                attach_image_to_pytest_html(rep, path)  # если у тебя внутри уже использует 'extras'
+                attach_image_to_pytest_html(rep, path)  # if your version already uses 'extras'
                 print(f"[SNAP] Saved failure screenshot with HR ROI: {path}")
             except Exception as e:
                 print(f"[WARN] Could not capture client screenshot: {e}")
@@ -205,8 +205,8 @@ else:
                 if not hasattr(rep, "extras"):
                     rep.extras = []
                 for st in getattr(item, "_steps", []):
-                    _append_step_card(item, st)                 # формируем html и images в item._reporter_extras
+                    _append_step_card(item, st)                 # generate HTML and images in item._reporter_extras
                 for ex in getattr(item, "_reporter_extras", []):
-                    rep.extras.append(ex)                       # кладём в новый API
+                    rep.extras.append(ex)                       # append to new API
             except Exception as e:
                 print(f"[WARN] Could not render step cards: {e}")

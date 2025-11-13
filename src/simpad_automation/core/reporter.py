@@ -10,15 +10,15 @@ import re
 from datetime import datetime
 from pathlib import Path
 
-# pyautogui базовые настройки оставим тут, чтобы снимки были быстрыми и без failsafe-стопов
+# pyautogui base settings are kept here to make screenshots fast and disable failsafe stops
 pyautogui.FAILSAFE = False
 pyautogui.PAUSE = 0.02
 
 
 def _client_region(hwnd) -> Optional[Tuple[int, int, int, int]]:
     """
-    Возвращает клиентский прямоугольник hwnd в экранных координатах как (x, y, w, h),
-    либо None, если окно недоступно.
+    Returns the client rectangle of hwnd in screen coordinates as (x, y, w, h),
+    or None if the window is unavailable.
     """
     if not hwnd or not win32gui.IsWindow(hwnd):
         return None
@@ -37,8 +37,7 @@ def _client_region(hwnd) -> Optional[Tuple[int, int, int, int]]:
 
 def _draw_hr_roi_overlay(img, client_w: int, client_h: int) -> None:
     """
-    Рисует ROI H/R (если в ocr.py объявлены HR_RX/RY/RW/RH).
-    Безопасно молчит при любой ошибке.
+    Draws the ROI H/R (if HR_RX/RY/RW/RH are declared in ocr.py).
     """
     try:
         from PIL import ImageDraw
@@ -54,8 +53,7 @@ def _draw_hr_roi_overlay(img, client_w: int, client_h: int) -> None:
             draw.rectangle([x0 - off, y0 - off, x1 + off, y1 + off], outline=(0, 255, 0))
 
         label = "HR ROI"
-        # простая плашка под подпись
-        # (без ImageFont — чтобы не тащить шрифты)
+        # simple label background (without ImageFont to avoid font dependencies)
         tw = max(36, len(label) * 6)
         th = 12
         draw.rectangle([x0, max(0, y0 - th - 4), x0 + tw + 6, y0], fill=(0, 255, 0))
@@ -66,13 +64,13 @@ def _draw_hr_roi_overlay(img, client_w: int, client_h: int) -> None:
 
 def save_client_screenshot(hwnd, dest_path: pathlib.Path, draw_hr_roi: bool = True) -> pathlib.Path:
     """
-    Делает скриншот клиентской области окна (если доступна) или всего экрана,
-    по желанию рисует HR ROI, сохраняет на диск и возвращает путь.
+    Takes a screenshot of the client area of the window (if available) or the entire screen,
+    optionally draws HR ROI, saves to disk and returns the path.
     """
     dest_path.parent.mkdir(parents=True, exist_ok=True)
     region = _client_region(hwnd)
 
-    # Снимок
+    # Screenshot
     if region:
         img = pyautogui.screenshot(region=region)  # PIL.Image
         client_w, client_h = region[2], region[3]
@@ -88,7 +86,7 @@ def save_client_screenshot(hwnd, dest_path: pathlib.Path, draw_hr_roi: bool = Tr
 
 
 def attach_image_to_pytest_html(rep, path):
-    """Прикрепляет изображение к pytest-html (self-contained)."""
+    """Attaches an image to pytest-html (self-contained)."""
     try:
         from pytest_html import extras
         if not hasattr(rep, "extras"):
@@ -122,14 +120,14 @@ def _append_step_card(node, step):
     shot_html = ""
     if step.get("screenshot"):
         p = Path(step["screenshot"]).resolve()
-        # относительный путь для красоты
+        # relative path for readability
         try:
             rel = p.relative_to(Path.cwd())
             rel_txt = rel.as_posix()
         except Exception:
             rel_txt = str(p)
 
-        # встроим миниатюру прямо в карточку (base64)
+        # embed thumbnail directly in the card (base64)
         try:
             data = base64.b64encode(p.read_bytes()).decode("ascii")
             thumb = f'<img src="data:image/png;base64,{data}" style="max-width:420px;display:block;margin-top:4px;" />'
@@ -148,9 +146,9 @@ def _append_step_card(node, step):
 
     try:
         from pytest_html import extras
-        node._reporter_extras.append(extras.html(card))     # html карточка
+        node._reporter_extras.append(extras.html(card))     # html card
         if step.get("screenshot"):
-            # и полноценный attachment (кроме превью) — тоже встраивается
+            # also attach a full-size image (in addition to the preview)
             node._reporter_extras.append(extras.image(str(Path(step["screenshot"]).resolve())))
     except Exception:
         pass
@@ -159,11 +157,11 @@ def _append_step_card(node, step):
 @contextmanager
 def step(request, name: str, hwnd=None, artifacts_dir: Path | None = None, draw_hr_roi: bool = True):
     """
-    Контекст-менеджер шага.
-    Пример:
+    Step context manager.
+    Example:
         with step(request, "Open Device Info", hwnd, artifacts_dir):
             click(...)
-    На исключении сохранит скриншот и отметит шаг как failed.
+    On exception, saves a screenshot and marks the step as failed.
     """
     node = _ensure_node_state(request)
     node._step_idx += 1
@@ -180,7 +178,7 @@ def step(request, name: str, hwnd=None, artifacts_dir: Path | None = None, draw_
     }
     node._steps.append(entry)
 
-    # подготовим папку для артефактов шага
+    # prepare directory for step artifacts
     step_dir = None
     if artifacts_dir:
         step_dir = Path(artifacts_dir) / f"step_{idx}_{_slug(name)}"
@@ -192,18 +190,18 @@ def step(request, name: str, hwnd=None, artifacts_dir: Path | None = None, draw_
     except Exception:
         entry["status"] = "failed"
         entry["ended"] = datetime.now().strftime("%H:%M:%S")
-        # Сохранить скриншот, если есть hwnd
+        # Save screenshot if hwnd is available
         try:
             if hwnd is not None and artifacts_dir is not None:
-                from .reporter import save_client_screenshot  # локальный импорт, чтобы не ломать импорты
+                from .reporter import save_client_screenshot  # local import to avoid circular dependencies
                 shot_path = (step_dir or Path(artifacts_dir)) / "failed.png"
                 save_client_screenshot(hwnd, shot_path, draw_hr_roi=draw_hr_roi)
                 entry["screenshot"] = shot_path
         finally:
             pass
-        # карточка шага попадёт в отчёт из makereport (см. conftest.py)
+        # Step card will be added to report in makereport (see conftest.py)
         raise
     else:
         entry["status"] = "passed"
         entry["ended"] = datetime.now().strftime("%H:%M:%S")
-    # карточка добавится в makereport
+    # Step card will be added in makereport
