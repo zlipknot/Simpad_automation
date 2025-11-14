@@ -30,7 +30,7 @@ def launch_app(timeout: float = 20.0):
             break
         time.sleep(0.2)
     if not hwnd:
-        raise RuntimeError("Окно SimPad не найдено после ShellExecute.")
+        raise RuntimeError("SimPad window not found after ShellExecute.")
 
     # 3) Bring it to the foreground and wait for the actual focus
     try:
