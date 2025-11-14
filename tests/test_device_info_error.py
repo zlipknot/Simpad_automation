@@ -46,7 +46,7 @@ def test_device_info_error_popup_two_steps(app_ctx, request):
         ok, details = assert_phrase_in_roi(
             hwnd,
             rect,
-            ui.ERROR_HEAD_ROI,  # убедись, что актуально: (0.060, 0.295, 0.880, 0.085)
+            ui.ERROR_HEAD_ROI, 
             "Unable to retrieve technical information",
             debug_name="device_info_headline",
             min_ratio=0.62,
